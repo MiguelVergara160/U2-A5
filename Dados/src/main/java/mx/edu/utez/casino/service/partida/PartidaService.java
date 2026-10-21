@@ -1,0 +1,130 @@
+package mx.edu.utez.casino.service.partida;
+
+import mx.edu.utez.casino.controller.partida.dto.RequestIniciarPartidaDTO;
+import mx.edu.utez.casino.exception.customExceptions.CustomBadRequestException;
+import mx.edu.utez.casino.exception.customExceptions.CustomNotFoundException;
+import mx.edu.utez.casino.model.jugador.Jugador;
+import mx.edu.utez.casino.model.partida.EstadoPartida;
+import mx.edu.utez.casino.model.partida.Partida;
+import mx.edu.utez.casino.model.tiro.Tiro;
+import mx.edu.utez.casino.repository.jugador.JugadorRepository;
+import mx.edu.utez.casino.repository.partida.PartidaRepository;
+import mx.edu.utez.casino.repository.tiro.TiroRepository;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.Random;
+
+@Service
+public class PartidaService {
+
+    private final PartidaRepository partidaRepository;
+    private final JugadorRepository jugadorRepository;
+    private final TiroRepository tiroRepository;
+    private final Random random = new Random();
+
+    public PartidaService(PartidaRepository partidaRepository,
+                          JugadorRepository jugadorRepository,
+                          TiroRepository tiroRepository) {
+        this.partidaRepository = partidaRepository;
+        this.jugadorRepository = jugadorRepository;
+        this.tiroRepository = tiroRepository;
+    }
+
+    public Partida iniciarPartida(RequestIniciarPartidaDTO payload) {
+        Optional<Jugador> jugadorOpt = jugadorRepository.findById(payload.getJugadorId());
+
+        if (!jugadorOpt.isPresent()) {
+            throw new CustomNotFoundException("El jugador no existe");
+        }
+
+        Jugador jugador = jugadorOpt.get();
+
+        if (!jugador.isActivo()) {
+            throw new CustomBadRequestException("El jugador no esta activo");
+        }
+
+        if (jugador.getSaldo() < payload.getApuesta()) {
+            throw new CustomBadRequestException("Saldo insuficiente para realizar la apuesta");
+        }
+
+        jugador.setSaldo(jugador.getSaldo() - payload.getApuesta());
+        jugadorRepository.save(jugador);
+
+        Partida partida = new Partida();
+        partida.setFecha(LocalDateTime.now());
+        partida.setEstado(EstadoPartida.EN_JUEGO);
+        partida.setJugador(jugador);
+        partida.setApuesta(payload.getApuesta());
+
+        return partidaRepository.save(partida);
+    }
+
+    public Tiro realizarTiro(Long partidaId) {
+        Optional<Partida> partidaOpt = partidaRepository.findById(partidaId);
+
+        if (!partidaOpt.isPresent()) {
+            throw new CustomNotFoundException("La partida no existe");
+        }
+
+        Partida partida = partidaOpt.get();
+
+        if (partida.getEstado() != EstadoPartida.EN_JUEGO) {
+            throw new CustomBadRequestException("La partida no esta en juego");
+        }
+
+        int dado1 = random.nextInt(6) + 1;
+        int dado2 = random.nextInt(6) + 1;
+        int suma = dado1 + dado2;
+        boolean esGanador = false;
+
+        if (suma == 7 || suma == 11) {
+            esGanador = true;
+            Jugador jugador = partida.getJugador();
+            jugador.setSaldo(jugador.getSaldo() + partida.getApuesta() * 2);
+            jugadorRepository.save(jugador);
+
+            partida.setEstado(EstadoPartida.FINALIZADA);
+            partidaRepository.save(partida);
+        } else if (suma == 2 || suma == 3 || suma == 12) {
+            partida.setEstado(EstadoPartida.FINALIZADA);
+            partidaRepository.save(partida);
+        }
+
+        Tiro tiro = new Tiro();
+        tiro.setPartida(partida);
+        tiro.setValorDado1(dado1);
+        tiro.setValorDado2(dado2);
+        tiro.setSuma(suma);
+        tiro.setEsGanador(esGanador);
+
+        return tiroRepository.save(tiro);
+    }
+
+    public Partida finalizarPartidaManual(Long partidaId) {
+        Optional<Partida> partidaOpt = partidaRepository.findById(partidaId);
+
+        if (!partidaOpt.isPresent()) {
+            throw new CustomNotFoundException("La partida no existe");
+        }
+
+        Partida partida = partidaOpt.get();
+
+        if (partida.getEstado() == EstadoPartida.FINALIZADA) {
+            throw new CustomBadRequestException("La partida ya esta finalizada");
+        }
+
+        partida.setEstado(EstadoPartida.FINALIZADA);
+        return partidaRepository.save(partida);
+    }
+
+    public List<Partida> obtenerHistorialPartida(Long jugadorId) {
+        if (!jugadorRepository.existsById(jugadorId)) {
+            throw new CustomNotFoundException("El jugador no existe");
+        }
+
+        return partidaRepository.findByJugadorId(jugadorId);
+    }
+}
